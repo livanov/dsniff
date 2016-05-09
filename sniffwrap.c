@@ -1,4 +1,3 @@
-#include <arpa/inet.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -12,56 +11,30 @@
 */
 
 
-
-#define SIZE_ETHERNET 			14 		/* ethernet headers are always exactly 14 bytes [1] */
-#define IP_HL(ip)               (((ip)->ip_vhl) & 0x0f)
-
-
-/* IP header */
-struct sniff_ip {
-        u_char  ip_vhl;                 /* version << 4 | header length >> 2 */
-        u_char  ip_tos;                 /* type of service */
-        u_short ip_len;                 /* total length */
-        u_short ip_id;                  /* identification */
-        u_short ip_off;                 /* fragment offset field */
-        #define IP_RF 0x8000            /* reserved fragment flag */
-        #define IP_DF 0x4000            /* dont fragment flag */
-        #define IP_MF 0x2000            /* more fragments flag */
-        #define IP_OFFMASK 0x1fff       /* mask for fragmenting bits */
-        u_char  ip_ttl;                 /* time to live */
-        u_char  ip_p;                   /* protocol */
-        u_short ip_sum;                 /* checksum */
-        struct  in_addr ip_src,ip_dst;  /* source and dest address */
-};
-
-
 void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet)
 {
 	char errbuf[PCAP_ERRBUF_SIZE];	/* Error string */
 	int j;
 	
-	const struct sniff_ethernet *ethernet = (struct sniff_ethernet*)(packet);
+	//const struct sniff_ethernet *ethernet = (struct sniff_ethernet*)(packet);
 	const struct sniff_ip *ip = (struct sniff_ip*)(packet + SIZE_ETHERNET);
-	int size_ip = IP_HL(ip)*4;
-	if (size_ip < 20) {
-		printf("   * Invalid IP header length: %u bytes\n", size_ip);
-		return;
-	}
+	//int size_ip = IP_HL(ip)*4;
+	//if (size_ip < 20) {
+	//	printf("   * Invalid IP header length: %u bytes\n", size_ip);
+	//	return;
+	//}
 	
 	subscribers *subscriber_list = (subscribers *) args;
 	
-	if(ip->ip_p == 1)
+	//char str[256];
+	//sprintf(str, "Jacked an ICMP packet from: %-16s to: ", inet_ntoa(ip->ip_src));
+	//sprintf(str + strlen(str), "%-16s\n", inet_ntoa(ip->ip_dst));
+	//printf("%s", str);
+	
+	for(j = 0; j < subscriber_list->current_count; j++)
 	{
-		char str[256];
-		sprintf(str, "Jacked an ICMP packet from: %-16s to: ", inet_ntoa(ip->ip_src));
-		sprintf(str + strlen(str), "%-16s\n", inet_ntoa(ip->ip_dst));
-		
-		//printf("%s", str);
-		
-		for(j = 0; j < subscriber_list->current_count; j++)
-		{
-			write(subscriber_list->socketids[j], str, 255);
-		}
+		write(subscriber_list->socketids[j], packet, header->len);
+		//write(subscriber_list->socketids[j], str, 4096);
 	}
 	
 	
@@ -136,8 +109,8 @@ void* sniffer_start(void* args)
 	
 	/* set filter for ip packets only */
 	
-	char filter_exp[] = "ip";		/* filter expression [3] */
-	struct bpf_program fp;			/* compiled filter program (expression) */
+	char filter_exp[] = "ip and not host 10.0.0.12";		/* filter expression [3] */
+	struct bpf_program fp;									/* compiled filter program (expression) */
 	
 	/* compile the filter expression */
 	if (pcap_compile(handle, &fp, filter_exp, 0, PCAP_NETMASK_UNKNOWN) == -1) {
@@ -156,7 +129,6 @@ void* sniffer_start(void* args)
 	/* set filter for ip packets only */
 	
     
-	//int i; for(i=0;i<10;i++) printf("%d ", subscriber_list->socketids[i]); printf("from sniffer_start\n");
 	
 	pcap_loop(handle, NUM_PACKETS_BFR_EXIT, got_packet, (u_char *) subscriber_list);
 	

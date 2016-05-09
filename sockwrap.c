@@ -42,7 +42,7 @@ int open_listening_socket(int *portno)
 	
 	if (bind(socketfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) 
 	{
-		fprintf(stderr, "Unable to bind to socket. ");
+		fprintf(stderr, "Unable to bind to socket.");
 		close(socketfd);
 		return -1;
 	}
