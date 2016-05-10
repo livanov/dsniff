@@ -19,7 +19,6 @@ int get_portno(int socketfd)
 	else
 	{
 		portno = ntohs(serv_addr.sin_port);
-		fprintf(stdout, "Socketfd %-9d listening on port: %d\n", socketfd, portno);
 	}
 	
 	return portno;
@@ -40,12 +39,17 @@ int open_listening_socket(int *portno)
 		return -1;
 	}
 	
-	if (bind(socketfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) 
-	{
-		fprintf(stderr, "Unable to bind to socket.");
-		close(socketfd);
-		return -1;
-	}
+	// TODO: temporary
+	do{
+		printf("\rWaiting to bind on listening port ... ");
+	}while(bind(socketfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0);
+	
+	//if (bind(socketfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) 
+	//{
+	//	fprintf(stderr, "Unable to bind to socket.");
+	//	close(socketfd);
+	//	return -1;
+	//}
 	
 	listen(socketfd, 5);  // Max 5 simultaneous ???
 	

@@ -23,46 +23,53 @@
 */
 
 
-subscribers *subscriber_list; 
+subscriber_list *subscribers; 
 
 volatile short program_abort = 0;
 
 void* publish(void* args)
 {
 	int portno = PUBLISHER_PORT;
-	fprintf(stdout, "Publisher opening to subscribers ... ");
 	int sockfd = open_listening_socket(&portno);
+	fprintf(stdout, "Sniffer service published to subscribers on port %d\n", portno);
 	if (sockfd == -1)
 		exit(EXIT_FAILURE);
 	
-
-	
-	while(subscriber_list->current_count < 10 && !program_abort) 
+	int connsockfd;
+	while(!program_abort) 
 	{		
 		struct sockaddr_in cli_addr;
 	    socklen_t clilen = sizeof(cli_addr);
     
-		int connsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen); // how to interrupt this?
+		connsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen); // how to interrupt this?
 		
-		subscriber_list->socketids[subscriber_list->current_count] = connsockfd;
-		subscriber_list->current_count++;
+		subscriber *client = malloc(sizeof(*client));
+		client->socketid = connsockfd;
+		client->next = subscribers->first;
+		inet_ntop(AF_INET, &(cli_addr.sin_addr), client->ip_addr, INET_ADDRSTRLEN ); // only ipv4 address
+		
+		fprintf(stdout, "%s connected (conn sock fd %d)\n", client->ip_addr, client->socketid);
+		
+		subscribers->first = client; 				//thread unsafe
+		subscribers->count++;						//thread unsafe
 	}
 	
-	int i;
-	for(i=0;i<subscriber_list->current_count;i++) close(subscriber_list->socketids[i]);
+	subscriber *tmp;
+	for( tmp = subscribers->first ; tmp != NULL ; tmp = tmp->next ) 
+		close(tmp->socketid);
 	
 	close(sockfd);
 }
 
 int main(int argc, char *argv[])
 {
-	subscriber_list = malloc(sizeof(subscribers));
-	subscriber_list->interface = strdup(get_device_name(argc, argv));
+	subscribers = malloc(sizeof(subscribers));
+	subscribers->interface = strdup(get_device_name(argc, argv));
 	
 	pthread_t snifferId;
-	int err = pthread_create(&snifferId, NULL, &sniffer_start, (void *)subscriber_list);
+	int err = pthread_create(&snifferId, NULL, &sniffer_start, (void *)subscribers);
 	if(err != 0)
-		printf("Failed to create background sniffer thread. Reason:[%s]", strerror(err));
+		fprintf(stderr, "Failed to create background sniffer thread. Reason:[%s]", strerror(err));
 	else
 		fprintf(stdout, "Sniffer started successfully!\n");
 	
@@ -77,7 +84,7 @@ int main(int argc, char *argv[])
 	do{
 		fgets(str, 255, stdin);
 
-		while(str[i]) { str[i] = tolower(str[i]); i++; } // converts string to upper
+		while(str[i]) { str[i] = tolower(str[i]); i++; } // converts string to all lower case
 	}while(
 		strncmp(str, COMMAND_EXIT, strlen(COMMAND_EXIT)) != 0 &&
 		strncmp(str, COMMAND_QUIT, strlen(COMMAND_QUIT)) != 0);
@@ -85,5 +92,5 @@ int main(int argc, char *argv[])
 	program_abort = 1;
 	pthread_join(publishId, NULL);
 
-	free(subscriber_list);
+	free(subscribers);
 }

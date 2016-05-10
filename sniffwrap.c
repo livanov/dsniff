@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -10,34 +11,46 @@
 #include <unistd.h>
 */
 
-
 void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet)
 {
-	char errbuf[PCAP_ERRBUF_SIZE];	/* Error string */
-	int j;
-	
 	//const struct sniff_ethernet *ethernet = (struct sniff_ethernet*)(packet);
-	const struct sniff_ip *ip = (struct sniff_ip*)(packet + SIZE_ETHERNET);
+	//const struct sniff_ip *ip = (struct sniff_ip*)(packet + SIZE_ETHERNET);
 	//int size_ip = IP_HL(ip)*4;
 	//if (size_ip < 20) {
 	//	printf("   * Invalid IP header length: %u bytes\n", size_ip);
 	//	return;
 	//}
+
+	uint16_t networkLen = htons(header->len);
+
+	subscriber_list *subscribers = (subscriber_list *) args;
+	subscriber *tmp, *prev = NULL;
 	
-	subscribers *subscriber_list = (subscribers *) args;
-	
-	//char str[256];
-	//sprintf(str, "Jacked an ICMP packet from: %-16s to: ", inet_ntoa(ip->ip_src));
-	//sprintf(str + strlen(str), "%-16s\n", inet_ntoa(ip->ip_dst));
-	//printf("%s", str);
-	
-	for(j = 0; j < subscriber_list->current_count; j++)
+	for( tmp = subscribers->first ; tmp != NULL ; tmp = tmp->next )
 	{
-		write(subscriber_list->socketids[j], packet, header->len);
-		//write(subscriber_list->socketids[j], str, 4096);
+		if (
+			send(tmp->socketid, &networkLen, sizeof(networkLen), MSG_NOSIGNAL) == -1 || 
+			send(tmp->socketid, packet, header->len, MSG_NOSIGNAL) == -1) // socket has been closed
+		{
+			close(tmp->socketid);
+			subscribers->count--; 					//thread unsafe
+			
+			fprintf(stdout, "%s has been disconnected\n", tmp->ip_addr);
+			
+			if( prev == NULL ) // tmp is the first element in the linked list
+			{
+				subscribers->first = tmp->next; 	//thread unsafe
+			}
+			else 
+			{ 
+				prev->next = tmp->next;				//thread unsafe
+			}
+		}
+		else // something has been transmitted, no guarantees it was the whole message
+		{ 
+			prev = tmp;
+		}
 	}
-	
-	
 	
 	//void *plugin;
 	//char *func_name = "got_packet";
@@ -103,14 +116,15 @@ pcap_t* get_handle(char *dev)
 
 void* sniffer_start(void* args)
 {
-	subscribers *subscriber_list = (subscribers *) args;
-	char *dev = subscriber_list->interface;
+	subscriber_list *subscribers = (subscriber_list *) args;
+	char *dev = subscribers->interface;
 	pcap_t *handle = get_handle(dev);
 	
 	/* set filter for ip packets only */
 	
-	char filter_exp[] = "ip and not host 10.0.0.12";		/* filter expression [3] */
-	struct bpf_program fp;									/* compiled filter program (expression) */
+	char filter_exp[] = "ip and not net 10.0.0.0/24";
+	//sprintf(filter_exp + strlen(filter_exp), "10.0.0.0/24");	/* filter expression [3] */
+	struct bpf_program fp;										/* compiled filter program (expression) */
 	
 	/* compile the filter expression */
 	if (pcap_compile(handle, &fp, filter_exp, 0, PCAP_NETMASK_UNKNOWN) == -1) {
@@ -130,7 +144,7 @@ void* sniffer_start(void* args)
 	
     
 	
-	pcap_loop(handle, NUM_PACKETS_BFR_EXIT, got_packet, (u_char *) subscriber_list);
+	pcap_loop(handle, NUM_PACKETS_BFR_EXIT, got_packet, (u_char *) subscribers);
 	
 	/* And close the session */
 	pcap_close(handle);
