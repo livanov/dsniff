@@ -4,3 +4,7 @@
 
 #define COMMAND_QUIT			"quit"
 #define COMMAND_EXIT			"exit"
+
+
+#define MAX_MODULE_NAME_LEN		64
+#define MAX_METRIC_NAME_LEN		64

@@ -3,7 +3,7 @@
 #include <stdlib.h>
 
 #include "sniffwrap.h"
-#include "subscribers.h"
+#include "data_models.h"
 #include "config.h"
 
 /*
@@ -51,24 +51,6 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 			prev = tmp;
 		}
 	}
-	
-	//void *plugin;
-	//char *func_name = "got_packet";
-	//
-	//typedef void (*got_packet_f) ();
-    //got_packet_f got_packet;
-	//
-	//plugin = dlopen("modules/icmp.so", RTLD_NOW);
-	//
-	//got_packet = dlsym (plugin, func_name);
-	//got_packet(args, header, packet);
-	
-	
-	//plugin = dlopen("./tcp.so", RTLD_NOW);
-	//got_packet = dlsym (plugin, func_name);
-	//got_packet();
-	//
-	//got_ip_packet(args, header, packet);
 }
 
 char* get_device_name(int argc, char *argv[])
@@ -122,7 +104,7 @@ void* sniffer_start(void* args)
 	
 	/* set filter for ip packets only */
 	
-	char filter_exp[] = "ip and not net 10.0.0.0/24";
+	char filter_exp[] = "ip";
 	//sprintf(filter_exp + strlen(filter_exp), "10.0.0.0/24");	/* filter expression [3] */
 	struct bpf_program fp;										/* compiled filter program (expression) */
 	
