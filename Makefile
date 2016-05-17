@@ -4,23 +4,24 @@ CC = gcc
 # compiler flags:
 #  -g    adds debugging information to the executable file
 #  -Wall turns on most, but not all, compiler warnings
-CFLAGS  = -g -Wall
+CFLAGS  = -g 
+#CFLAGS  = -g -Wall
 OBJECTS = $(patsubst %.c, %.so, $(wildcard modules/*.c))
 
 
 all: server.out client.out ${OBJECTS}
 
 modules/%.so: modules/%.c
-	${CC} $< -shared -fPIC -o $@ 
+	${CC} ${CFLAGS} $< -shared -fPIC -o $@ 
 
 %.o: %.h
 	${CC} $< -o $@ 
 
 server.out: server.c sniffwrap.c sockwrap.c
-	${CC} $^ -pthread -lpopt -lpcap -o $@
+	${CC} ${CFLAGS} $^ -pthread -lpopt -lpcap -o $@
 	
 client.out: client.c sockwrap.c
-	${CC} $^ -pthread -ldl -o $@ 
+	${CC} ${CFLAGS} $^ -pthread -ldl -o $@ 
 
 test: all
 

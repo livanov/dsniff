@@ -12,9 +12,19 @@
 #include "data_models.h"
 //#include "modules/icmpcount.h"
 
-#define BUFFER_SIZE		4
-#define BUFFER_IN_S		3
+#define BUFFER_SIZE		100
+#define BUFFER_IN_S		2
 
+struct stats{
+	int accumulated_time;
+	int idx;
+	int length_in_s;
+	double accumulated_aggregate;
+	struct report *last;
+	struct report reports[BUFFER_SIZE];
+};
+
+struct stats *stats[6];
 
 //TODO: change to interface struct
 typedef void (*flush_f) ();
@@ -33,16 +43,17 @@ short program_abort = 0;
 struct report reports[BUFFER_SIZE];
 //struct report *reports;
 struct report reports_per_m[BUFFER_SIZE];
-struct report *reports_per_hr;
+struct report reports_per_hr[BUFFER_SIZE];
 struct report *reports_per_day;
 struct report *reports_per_week;
 struct report *reports_per_month;
-int count = 0;
-double avg=0;
 
-struct report *last;
-int idx = -1;
-int idx_m = -1;
+struct report *report_aggregates[3] = { reports, reports_per_m, reports_per_hr };
+
+int accumulated_times[3] = { 1, 0, 0 };
+double accumulated_aggregates[3] = { 0, 0, 0 };
+int idxes[3] = { -1, -1, -1 };
+
 
 void load_module(char *module_name)
 {
@@ -55,87 +66,134 @@ void load_module(char *module_name)
 	aggregate_data = dlsym ( handle, "aggregate_data" );
 }
 
-void send_to_aggregator(struct report *this)
+void printstats(int metric_idx, int level)
 {
-	static int current_passed_time = 1;
-	static double sum = 0;
-	
+	int i, j;
+		
+	printf("----------------------------------- [ %d ] -----------------------------------\n", level);
+	for(i = 0; i < 6; i++)
+	{
+		int idx = stats[i]->idx;
+		
+		printf("idx: [%5d]; accum_time: [%5d]; accum_aggre: [%14f]; ",
+			idx, stats[i]->accumulated_time, stats[i]->accumulated_aggregate);
+
+		if(idx > -1)
+			printf("\n\tLast record %15s: [%14f] timestamp: [%d]", 
+				stats[i]->reports[idx].metrics[metric_idx].name, 
+				stats[i]->reports[idx].metrics[metric_idx].count,
+				stats[i]->reports[idx].timestamp);
+		
+		printf("\n");
+	}
+	printf("----------------------------------- [ %d ] -----------------------------------\n\n", level);
+}
+
+void aggregate(struct report this, int level)
+{
 	int metric_idx = 2;
 
+	if(level > 5) return;
+	
+	int metric_count =  this.metric_count;
+	int *accumulated_time = &( stats[level]->accumulated_time );
+	int *idx = &( stats[level]->idx );
+	double *accumulated_aggregate = &( stats[level]->accumulated_aggregate );
+	struct report *ss = stats[level]->reports;
+	int *buffer_size = &( stats[level + 1]->length_in_s );
+	
 	// sets the length of this period based on previous period
-	int len = this->timestamp;
-	if(idx == -1) len = 0;
-		else len -= reports[idx].timestamp;
-
-	if( ++idx >= BUFFER_SIZE ) idx -= BUFFER_SIZE;
-	memcpy (&(reports[idx]), this, sizeof(struct report));
-	reports[idx].metrics = malloc (this->metric_count * sizeof(struct metric));
-	memcpy(reports[idx].metrics, this->metrics, this->metric_count * sizeof(struct metric));
-
-	int remaining_unused_time = len;
-	double residual = (this->metrics)[metric_idx].count;
-
-	//printf("metric[2]->count: [%f]\n", residual);
-
-	while ( current_passed_time + remaining_unused_time >= BUFFER_IN_S) {
-		idx_m = (idx_m + 1) % BUFFER_SIZE;
-		struct report *new_m_report = &(reports_per_m[idx_m]);
-
-		double frac = ( BUFFER_IN_S - current_passed_time ) / ( 1.0 * len );
-
-		new_m_report->metrics = malloc ( this->metric_count * sizeof (struct metric) );
-		(new_m_report->metrics)[metric_idx].count = ( sum + frac * (this->metrics)[metric_idx].count );
-
-		residual -= frac * (this->metrics)[metric_idx].count;
-
-		remaining_unused_time += ( current_passed_time - BUFFER_IN_S );
-		current_passed_time = 0;
-		sum = 0;
-		*last = *this;
-	}
-
-	current_passed_time += remaining_unused_time;
-	sum += residual;
-
+	int last_time_window_len;
+	if(*idx == -1) last_time_window_len = stats[level]->length_in_s;
+		else last_time_window_len = this.timestamp - ss[*idx].timestamp;
+		
+	if( ++(*idx) >= BUFFER_SIZE ) 
+		*idx -= BUFFER_SIZE;
 	
+	ss[*idx] = this;
+	ss[*idx].metrics = malloc(metric_count * sizeof(struct metric));
+	memcpy(ss[*idx].metrics, this.metrics, metric_count * sizeof(struct metric));
 	
+	int remaining_unused_time =  last_time_window_len;// / stats[level]->length_in_s;
+	double residual = (this.metrics)[metric_idx].count;
 	
-	printf("idx_m: [%d]\n", idx_m);
-	int i;
-	for ( i = 0 ; i <= idx_m ; i++)
-	{
-		printf("%f ", ((reports_per_m[i]).metrics[metric_idx]).count);
+	while ( *accumulated_time + remaining_unused_time >= *buffer_size ) {
+		
+		struct report aggregated_report;
+		aggregated_report.module_name = malloc (sizeof(this.module_name));
+		strcpy(aggregated_report.module_name, this.module_name);
+		aggregated_report.metric_count = metric_count;
+		
+		aggregated_report.metrics = malloc ( metric_count * sizeof (struct metric) );
+		
+		int i;
+		for( i = 0 ; i < metric_count ; i++)
+		{
+			aggregated_report.metrics[i].name = malloc (sizeof((this.metrics)[i].name));
+			strcpy(aggregated_report.metrics[i].name, (this.metrics)[i].name);
+		}
+		
+		double frac = ( *buffer_size - *accumulated_time ) / ( 1.0 * last_time_window_len );
+		
+		aggregated_report.metrics[metric_idx].count = *accumulated_aggregate 
+						+ frac * (this.metrics)[metric_idx].count;
+						
+		if(level==-1) printf("\nlast_win:[%d]\t\tremain:[%d]\nresidual:[%f]\taccu_time[%d]\nbuff_size[%d]\t\taccu_agg:[%d]\nfrac:[%f]\t\tudp count:[%f]\n\n",
+				last_time_window_len, remaining_unused_time, residual, *accumulated_time, 
+				*buffer_size, *accumulated_aggregate, frac, aggregated_report.metrics[metric_idx].count);
+		
+		residual -= frac * ( this.metrics )[metric_idx].count;
+    
+		remaining_unused_time += ( *accumulated_time - *buffer_size );
+		stats[level]->last = &this;
+		
+		aggregated_report.timestamp = this.timestamp - stats[level]->length_in_s;
+		
+		aggregate(aggregated_report, ++level);
+		
+		*accumulated_time = 0;
+		*accumulated_aggregate = 0;
+		level--;
 	}
     
-	printf("\n----------------------\n");
+	*accumulated_time += remaining_unused_time;
+	*accumulated_aggregate += residual;
+	
+	if(level == 0) printstats(metric_idx, level);
+}
+
+void send_to_aggregator(struct report this)
+{
+	//TODO: send over TCP
+	
+	aggregate(this, 0);
 }
 
 void* reporting_start(void* args)
 {
-	struct report *report = malloc(sizeof(report));
-	report->module_name = malloc(MAX_MODULE_NAME_LEN);
-	strcpy(report->module_name, get_module_name());
-	report->metric_count = get_metric_count();
+	struct report report;
+	report.module_name = malloc(MAX_MODULE_NAME_LEN);
+	strcpy(report.module_name, get_module_name());
+	report.metric_count = get_metric_count();
 
-	last = reports;
+	//last = reports;
 
 	while(!program_abort)
 	{
 		sleep( 1 );
 
-		report->timestamp = time(NULL);
+		report.timestamp = time(NULL);
 
-		report->metrics = aggregate_data();
-
+		report.metrics = aggregate_data();
+		
 		send_to_aggregator(report); // thread unsafe
 
-		free(report->metrics);
+		free(report.metrics);
 		
 		flush(); // thread unsafe
 	}
 
-	free(report->module_name);
-	free(report);
+	free(report.module_name);
 }
 
 void check_argument_list(int argc, char *argv[])
@@ -185,11 +243,29 @@ void receive_packets(int socketfd)
 
 int main(int argc, char *argv[])
 {
-
-	//make dynamic
-	//reports = malloc(60 * 60 * 24 * 31 * 3 * sizeof(struct report));
-	//memset(reports, 0, sizeof(reports));
-
+	int i;
+	for( i = 0; i < 6; i++)
+	{
+		stats[i] = malloc(sizeof(struct stats));
+		stats[i]->idx = -1;
+			
+			stats[i]->accumulated_time = 0;
+		if( i == 0 ) 
+		{
+			stats[i]->length_in_s = 1;
+		}
+		else 
+			stats[i]->length_in_s = stats[i-1]->length_in_s * BUFFER_IN_S;
+	}
+	
+	stats[0]->length_in_s = 1;
+	stats[1]->length_in_s = stats[0]->length_in_s * 60;
+	stats[2]->length_in_s = stats[1]->length_in_s * 60;
+	stats[3]->length_in_s = stats[2]->length_in_s * 24;
+	stats[4]->length_in_s = stats[3]->length_in_s * 30;
+	stats[5]->length_in_s = stats[4]->length_in_s * 100;
+	
+	
 	check_argument_list(argc, argv);
 
 	load_module("modules/icmpcount.so");

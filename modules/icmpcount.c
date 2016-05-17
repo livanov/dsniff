@@ -67,6 +67,7 @@ struct metric* aggregate_data()
 	strcpy((metrics)[3].name, "others count");
 	(metrics)[3].count = other;
 	
+	
 	return metrics;
 }
 
