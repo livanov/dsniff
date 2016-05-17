@@ -10,6 +10,7 @@
 #define MAX_METRIC_NAME_LEN		64
 
 
+#define REPORTS_TO_SAVE			100
 
 #define SECONDS_IN_MINUTE		60
 #define MINUTES_IN_HOUR			60

@@ -19,17 +19,6 @@
 #define LEVEL_PER_MONTH		4
 #define LEVEL_PER_YEAR		5
 
-#define BUFFER_SIZE		100
-
-struct stats{
-	int accumulated_time;
-	int idx;
-	int period_len_in_s;
-	double accumulated_aggregate;
-	struct report *last;
-	struct report reports[BUFFER_SIZE];
-};
-
 struct stats *stats[LEVEL_PER_YEAR + 1];
 
 //TODO: change to interface struct
@@ -59,23 +48,27 @@ void load_module(char *module_name)
 	aggregate_data = dlsym ( handle, "aggregate_data" );
 }
 
-static void printstats(int metric_idx, int level)
+static void printstats(int level)
 {
 	int i, j;
+	int c=0;
 		
 	printf("----------------------------------- [ %d ] -----------------------------------\n", level);
-	for(i = 0; i < 6; i++)
+	for(i = 0; i <= LEVEL_PER_YEAR; i++)
 	{
 		int idx = stats[i]->idx;
 		
-		printf("idx: [%5d]; accum_time: [%5d]; accum_aggre: [%14f]; ",
-			idx, stats[i]->accumulated_time, stats[i]->accumulated_aggregate);
-
+		printf("idx: [%5d]; accum_time: [%5d];", idx, stats[i]->accumulated_time);
+		
 		if(idx > -1)
-			printf("\n\tLast record %15s: [%14f] timestamp: [%d]", 
-				stats[i]->reports[idx].metrics[metric_idx].name, 
-				stats[i]->reports[idx].metrics[metric_idx].count,
-				stats[i]->reports[idx].timestamp);
+		{
+			printf("\n\tLast record - timestamp [%d]\n", stats[i]->reports[idx].timestamp);
+			for(j = 0; j < stats[i]->reports[idx].metric_count; j++)
+				printf("\t\t%15s: [%11.3f] accumulated: [%11.3f]\n", 
+					stats[i]->reports[idx].metrics[j].name, 
+					stats[i]->reports[idx].metrics[j].count,
+					stats[i]->accumulated_aggregates[j]);
+		}
 		
 		printf("\n");
 	}
@@ -87,28 +80,37 @@ void aggregate(struct report this, int level)
 	int metric_idx = 2;
 
 	if(level > LEVEL_PER_YEAR) return;
-	
+
 	int metric_count =  this.metric_count;
+	double residual[metric_count];
 	int *accumulated_time = &( stats[level]->accumulated_time );
-	int *idx = &( stats[level]->idx );
-	double *accumulated_aggregate = &( stats[level]->accumulated_aggregate );
-	struct report *ss = stats[level]->reports;
+	int *last_report_idx = &( stats[level]->idx );
+	double *accumulated_aggregates = stats[level]->accumulated_aggregates;
+	struct report *reports = stats[level]->reports;
+	int *this_level_buffer_capacity = &( stats[level]->period_len_in_s );
 	int *next_level_buffer_capacity = &( stats[level + 1]->period_len_in_s );
 	
 	// sets the length of this period based on previous period
 	int last_time_window_len;
-	if(*idx == -1) last_time_window_len = stats[level]->period_len_in_s;
-		else last_time_window_len = this.timestamp - ss[*idx].timestamp;
+	if(*last_report_idx == -1) last_time_window_len = *this_level_buffer_capacity;
+		else last_time_window_len = this.timestamp - reports[*last_report_idx].timestamp;
+
 		
-	if( ++(*idx) >= BUFFER_SIZE ) 
-		*idx -= BUFFER_SIZE;
+	if( ++(*last_report_idx) >= REPORTS_TO_SAVE ) 
+		*last_report_idx -= REPORTS_TO_SAVE;
 	
-	ss[*idx] = this;
-	ss[*idx].metrics = malloc(metric_count * sizeof(struct metric));
-	memcpy(ss[*idx].metrics, this.metrics, metric_count * sizeof(struct metric));
+	reports[*last_report_idx] = this;
+	reports[*last_report_idx].metrics = malloc(metric_count * sizeof(struct metric));
+	memcpy(reports[*last_report_idx].metrics, this.metrics, metric_count * sizeof(struct metric));
 	
 	int remaining_unused_time =  last_time_window_len;
-	double residual = (this.metrics)[metric_idx].count;
+	int i;
+	for( i = 0 ; i < metric_count ; i++)
+	{
+		residual[i] = this.metrics[i].count;
+	}
+	
+	//double residual = (this.metrics)[metric_idx].count;
 	
 	while ( *accumulated_time + remaining_unused_time >= *next_level_buffer_capacity ) {
 		
@@ -119,36 +121,39 @@ void aggregate(struct report this, int level)
 		
 		aggregated_report.metrics = malloc ( metric_count * sizeof (struct metric) );
 		
-		int i;
+		double frac = ( *next_level_buffer_capacity - *accumulated_time ) / ( 1.0 * last_time_window_len );
+		
 		for( i = 0 ; i < metric_count ; i++)
 		{
 			aggregated_report.metrics[i].name = malloc (sizeof((this.metrics)[i].name));
 			strcpy(aggregated_report.metrics[i].name, (this.metrics)[i].name);
+		
+			aggregated_report.metrics[i].count = accumulated_aggregates[i]
+					+ frac * (this.metrics)[i].count;
+					
+			residual[i] -= frac * ( this.metrics )[i].count;
 		}
 		
-		double frac = ( *next_level_buffer_capacity - *accumulated_time ) / ( 1.0 * last_time_window_len );
-		
-		aggregated_report.metrics[metric_idx].count = *accumulated_aggregate 
-						+ frac * (this.metrics)[metric_idx].count;
-						
-		residual -= frac * ( this.metrics )[metric_idx].count;
     
 		remaining_unused_time += ( *accumulated_time - *next_level_buffer_capacity );
-		stats[level]->last = &this;
 		
-		aggregated_report.timestamp = this.timestamp - stats[level]->period_len_in_s;
+		aggregated_report.timestamp = this.timestamp - *this_level_buffer_capacity;
 		
 		aggregate(aggregated_report, ++level);
+		level--;
 		
 		*accumulated_time = 0;
-		*accumulated_aggregate = 0;
-		level--;
+		for( i = 0 ; i < metric_count ; i++)
+			accumulated_aggregates[i] = 0;
+		//*accumulated_aggregate = 0;
 	}
     
 	*accumulated_time += remaining_unused_time;
-	*accumulated_aggregate += residual;
+	for( i = 0 ; i < metric_count ; i++)
+		accumulated_aggregates[i] += residual[i];
+	//*accumulated_aggregate += residual;
 	
-	if(level == 0) printstats(metric_idx, level);
+	if(level == 0) printstats(level);
 }
 
 void send_to_aggregator(struct report this)
@@ -164,6 +169,10 @@ void* reporting_start(void* args)
 	report.module_name = malloc(MAX_MODULE_NAME_LEN);
 	strcpy(report.module_name, get_module_name());
 	report.metric_count = get_metric_count();
+	
+	int i;
+	for( i = 0 ; i <= LEVEL_PER_YEAR; i++)
+		stats[i]->accumulated_aggregates = malloc( report.metric_count * sizeof(double) );
 
 	while(!program_abort)
 	{
@@ -231,12 +240,11 @@ void receive_packets(int socketfd)
 void initialize_stat_variables()
 {
 	int i;
-	for( i = 0; i < 6; i++)
+	for( i = 0; i <= LEVEL_PER_YEAR; i++)
 	{
 		stats[i] = malloc(sizeof(struct stats));
 		stats[i]->idx = -1;
 		stats[i]->accumulated_time = 0;
-		//stats[i]->reports = new report[1];
 		
 		// read past records from db
 	}
