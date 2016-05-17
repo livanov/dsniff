@@ -12,19 +12,25 @@
 #include "data_models.h"
 //#include "modules/icmpcount.h"
 
+#define LEVEL_PER_SECOND	0
+#define LEVEL_PER_MINUTE	1
+#define LEVEL_PER_HOUR		2
+#define LEVEL_PER_DAY		3
+#define LEVEL_PER_MONTH		4
+#define LEVEL_PER_YEAR		5
+
 #define BUFFER_SIZE		100
-#define BUFFER_IN_S		2
 
 struct stats{
 	int accumulated_time;
 	int idx;
-	int length_in_s;
+	int period_len_in_s;
 	double accumulated_aggregate;
 	struct report *last;
 	struct report reports[BUFFER_SIZE];
 };
 
-struct stats *stats[6];
+struct stats *stats[LEVEL_PER_YEAR + 1];
 
 //TODO: change to interface struct
 typedef void (*flush_f) ();
@@ -33,26 +39,13 @@ typedef char* (*get_module_name_f) ();
 typedef void (*got_packet_f) (char *packetBytes, int packetLen);
 typedef struct metric* (*aggregate_data_f)();
 
-flush_f flush;
-get_metric_count_f get_metric_count;
-get_module_name_f get_module_name;
-got_packet_f got_packet;
-aggregate_data_f aggregate_data;
+flush_f 				flush;
+get_metric_count_f 		get_metric_count;
+get_module_name_f 		get_module_name;
+got_packet_f 			got_packet;
+aggregate_data_f 		aggregate_data;
 
-short program_abort = 0;
-struct report reports[BUFFER_SIZE];
-//struct report *reports;
-struct report reports_per_m[BUFFER_SIZE];
-struct report reports_per_hr[BUFFER_SIZE];
-struct report *reports_per_day;
-struct report *reports_per_week;
-struct report *reports_per_month;
-
-struct report *report_aggregates[3] = { reports, reports_per_m, reports_per_hr };
-
-int accumulated_times[3] = { 1, 0, 0 };
-double accumulated_aggregates[3] = { 0, 0, 0 };
-int idxes[3] = { -1, -1, -1 };
+short 					program_abort = 0;
 
 
 void load_module(char *module_name)
@@ -66,7 +59,7 @@ void load_module(char *module_name)
 	aggregate_data = dlsym ( handle, "aggregate_data" );
 }
 
-void printstats(int metric_idx, int level)
+static void printstats(int metric_idx, int level)
 {
 	int i, j;
 		
@@ -93,18 +86,18 @@ void aggregate(struct report this, int level)
 {
 	int metric_idx = 2;
 
-	if(level > 5) return;
+	if(level > LEVEL_PER_YEAR) return;
 	
 	int metric_count =  this.metric_count;
 	int *accumulated_time = &( stats[level]->accumulated_time );
 	int *idx = &( stats[level]->idx );
 	double *accumulated_aggregate = &( stats[level]->accumulated_aggregate );
 	struct report *ss = stats[level]->reports;
-	int *buffer_size = &( stats[level + 1]->length_in_s );
+	int *next_level_buffer_capacity = &( stats[level + 1]->period_len_in_s );
 	
 	// sets the length of this period based on previous period
 	int last_time_window_len;
-	if(*idx == -1) last_time_window_len = stats[level]->length_in_s;
+	if(*idx == -1) last_time_window_len = stats[level]->period_len_in_s;
 		else last_time_window_len = this.timestamp - ss[*idx].timestamp;
 		
 	if( ++(*idx) >= BUFFER_SIZE ) 
@@ -114,10 +107,10 @@ void aggregate(struct report this, int level)
 	ss[*idx].metrics = malloc(metric_count * sizeof(struct metric));
 	memcpy(ss[*idx].metrics, this.metrics, metric_count * sizeof(struct metric));
 	
-	int remaining_unused_time =  last_time_window_len;// / stats[level]->length_in_s;
+	int remaining_unused_time =  last_time_window_len;
 	double residual = (this.metrics)[metric_idx].count;
 	
-	while ( *accumulated_time + remaining_unused_time >= *buffer_size ) {
+	while ( *accumulated_time + remaining_unused_time >= *next_level_buffer_capacity ) {
 		
 		struct report aggregated_report;
 		aggregated_report.module_name = malloc (sizeof(this.module_name));
@@ -133,21 +126,17 @@ void aggregate(struct report this, int level)
 			strcpy(aggregated_report.metrics[i].name, (this.metrics)[i].name);
 		}
 		
-		double frac = ( *buffer_size - *accumulated_time ) / ( 1.0 * last_time_window_len );
+		double frac = ( *next_level_buffer_capacity - *accumulated_time ) / ( 1.0 * last_time_window_len );
 		
 		aggregated_report.metrics[metric_idx].count = *accumulated_aggregate 
 						+ frac * (this.metrics)[metric_idx].count;
 						
-		if(level==-1) printf("\nlast_win:[%d]\t\tremain:[%d]\nresidual:[%f]\taccu_time[%d]\nbuff_size[%d]\t\taccu_agg:[%d]\nfrac:[%f]\t\tudp count:[%f]\n\n",
-				last_time_window_len, remaining_unused_time, residual, *accumulated_time, 
-				*buffer_size, *accumulated_aggregate, frac, aggregated_report.metrics[metric_idx].count);
-		
 		residual -= frac * ( this.metrics )[metric_idx].count;
     
-		remaining_unused_time += ( *accumulated_time - *buffer_size );
+		remaining_unused_time += ( *accumulated_time - *next_level_buffer_capacity );
 		stats[level]->last = &this;
 		
-		aggregated_report.timestamp = this.timestamp - stats[level]->length_in_s;
+		aggregated_report.timestamp = this.timestamp - stats[level]->period_len_in_s;
 		
 		aggregate(aggregated_report, ++level);
 		
@@ -176,11 +165,9 @@ void* reporting_start(void* args)
 	strcpy(report.module_name, get_module_name());
 	report.metric_count = get_metric_count();
 
-	//last = reports;
-
 	while(!program_abort)
 	{
-		sleep( 1 );
+		sleep( 2 );
 
 		report.timestamp = time(NULL);
 
@@ -241,35 +228,35 @@ void receive_packets(int socketfd)
     }
 }
 
-int main(int argc, char *argv[])
+void initialize_stat_variables()
 {
 	int i;
 	for( i = 0; i < 6; i++)
 	{
 		stats[i] = malloc(sizeof(struct stats));
 		stats[i]->idx = -1;
-			
-			stats[i]->accumulated_time = 0;
-		if( i == 0 ) 
-		{
-			stats[i]->length_in_s = 1;
-		}
-		else 
-			stats[i]->length_in_s = stats[i-1]->length_in_s * BUFFER_IN_S;
+		stats[i]->accumulated_time = 0;
+		//stats[i]->reports = new report[1];
+		
+		// read past records from db
 	}
 	
-	stats[0]->length_in_s = 1;
-	stats[1]->length_in_s = stats[0]->length_in_s * 60;
-	stats[2]->length_in_s = stats[1]->length_in_s * 60;
-	stats[3]->length_in_s = stats[2]->length_in_s * 24;
-	stats[4]->length_in_s = stats[3]->length_in_s * 30;
-	stats[5]->length_in_s = stats[4]->length_in_s * 100;
-	
-	
+	stats[ LEVEL_PER_SECOND ]->period_len_in_s = 1;
+	stats[ LEVEL_PER_MINUTE ]->period_len_in_s = stats[ LEVEL_PER_SECOND ]->period_len_in_s * SECONDS_IN_MINUTE;
+	stats[ LEVEL_PER_HOUR	]->period_len_in_s = stats[ LEVEL_PER_MINUTE ]->period_len_in_s * MINUTES_IN_HOUR;
+	stats[ LEVEL_PER_DAY	]->period_len_in_s = stats[ LEVEL_PER_HOUR	 ]->period_len_in_s * HOURS_IN_DAY;
+	stats[ LEVEL_PER_MONTH	]->period_len_in_s = stats[ LEVEL_PER_DAY	 ]->period_len_in_s * DAYS_IN_MONTH;
+	stats[ LEVEL_PER_YEAR	]->period_len_in_s = stats[ LEVEL_PER_MONTH	 ]->period_len_in_s * MONTHS_IN_YEAR;
+}
+
+int main(int argc, char *argv[])
+{
 	check_argument_list(argc, argv);
 
 	load_module("modules/icmpcount.so");
 
+	initialize_stat_variables();
+	
 	int socketfd = connect_to_publisher(argv[1]);			// connects to publisher by hostname/IP address
 
 	pthread_t reportingThread = establish_reporting();		// connects to aggregator

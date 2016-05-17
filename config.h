@@ -8,3 +8,11 @@
 
 #define MAX_MODULE_NAME_LEN		64
 #define MAX_METRIC_NAME_LEN		64
+
+
+
+#define SECONDS_IN_MINUTE		60
+#define MINUTES_IN_HOUR			60
+#define HOURS_IN_DAY			24
+#define DAYS_IN_MONTH			30
+#define MONTHS_IN_YEAR			12
