@@ -1,33 +1,56 @@
 #include "config.h"
 
 struct metric{
-	char* name;
-	double count;
+	//char* name;
+	double value;
 };
 
 struct report{
-	char *module_name;
-	time_t timestamp;
+	time_t start;
+	time_t end;
 	struct metric *metrics;
-	int metric_count;
+};
+
+struct report_list{
+	struct report *report;
+	struct report_list *next;
+};
+
+struct normal_distribution{
+	double std;
+	double mean;
+	long count;
+};
+
+struct aggregate{
+	time_t start;
+	time_t end;
+	//int length; // int?
+	struct normal_distribution normal_distribution;
+	struct aggregate *next;
 };
 
 struct stats{
-	int accumulated_time;
-	int idx;
-	int period_len_in_s;
-	double *accumulated_aggregates;
-	struct report reports[REPORTS_TO_SAVE];
+	char *module_name;
+	long count;
+	short metric_count;
+	short accumulated_time;
+	double residual;
+	struct report_list *reports;
+	struct aggregate *history;
 };
 
-typedef struct subscriber{
-	int socketid;
-	char ip_addr[16];
-	struct subscriber *next;
-} subscriber;
 
-typedef struct subscriber_list{
-	char *interface;
-	int count;
-	struct subscriber *first;
-} subscriber_list;
+struct ModuleInterface{
+	void 			(*flush) 				();
+	int 			(*get_metric_count) 	();
+	char* 			(*get_module_name) 		();
+	void 			(*got_packet) 			(const char *, int );
+	struct metric* 	(*aggregate_data)		();
+};
+
+struct SnifferInfo{
+	struct ModuleInterface *modules;
+	short moduleCount;
+	char *device;
+};

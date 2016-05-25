@@ -9,7 +9,7 @@ CFLAGS  = -g
 OBJECTS = $(patsubst %.c, %.so, $(wildcard modules/*.c))
 
 
-all: server.out client.out ${OBJECTS}
+all: clean worker.out ${OBJECTS}
 
 modules/%.so: modules/%.c
 	${CC} ${CFLAGS} $< -shared -fPIC -o $@ 
@@ -17,12 +17,9 @@ modules/%.so: modules/%.c
 %.o: %.h
 	${CC} $< -o $@ 
 
-server.out: server.c sniffwrap.c sockwrap.c
-	${CC} ${CFLAGS} $^ -pthread -lpopt -lpcap -o $@
+worker.out: worker.c sniffwrap.c sockwrap.c master.c
+	${CC} ${CFLAGS} $^ -pthread -lpopt -lpcap -ldl -lm -o $@
 	
-client.out: client.c sockwrap.c
-	${CC} ${CFLAGS} $^ -pthread -ldl -o $@ 
-
 test: all
 
 clean:

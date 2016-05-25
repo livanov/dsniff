@@ -6,10 +6,13 @@
 #include "data_models.h"
 #include "config.h"
 
+
+//#include <dlfcn.h>
 /*
-#include <dlfcn.h>
 #include <unistd.h>
 */
+
+//typedef void (*got_packet_f) (const char *, int );
 
 void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet)
 {
@@ -20,36 +23,11 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 	//	printf("   * Invalid IP header length: %u bytes\n", size_ip);
 	//	return;
 	//}
-
-	uint16_t networkLen = htons(header->len);
-
-	subscriber_list *subscribers = (subscriber_list *) args;
-	subscriber *tmp, *prev = NULL;
-	
-	for( tmp = subscribers->first ; tmp != NULL ; tmp = tmp->next )
+	struct SnifferInfo *snifferInfo = (struct SnifferInfo *) args;
+	short i;
+	for( i = 0 ; i < snifferInfo->moduleCount; i++ )
 	{
-		if (
-			send(tmp->socketid, &networkLen, sizeof(networkLen), MSG_NOSIGNAL) == -1 || 
-			send(tmp->socketid, packet, header->len, MSG_NOSIGNAL) == -1) // socket has been closed
-		{
-			close(tmp->socketid);
-			subscribers->count--; 					//thread unsafe
-			
-			fprintf(stdout, "%s has been disconnected\n", tmp->ip_addr);
-			
-			if( prev == NULL ) // tmp is the first element in the linked list
-			{
-				subscribers->first = tmp->next; 	//thread unsafe
-			}
-			else 
-			{ 
-				prev->next = tmp->next;				//thread unsafe
-			}
-		}
-		else // something has been transmitted, no guarantees it was the whole message
-		{ 
-			prev = tmp;
-		}
+		snifferInfo->modules[i].got_packet(packet, header->len);
 	}
 }
 
@@ -57,7 +35,7 @@ char* get_device_name(int argc, char *argv[])
 {
 	char *dev;						/* The device to sniff on */
 	//bpf_u_int32 mask;				/* Our netmask */
-	//bpf_u_int32 ip;					/* Our IP */
+	//bpf_u_int32 ip;				/* Our IP */
 	char errbuf[PCAP_ERRBUF_SIZE];	/* Error string */
 
 	// Set the device to sniff on
@@ -95,12 +73,11 @@ pcap_t* get_handle(char *dev)
 	return handle;
 }
 
-
 void* sniffer_start(void* args)
 {
-	subscriber_list *subscribers = (subscriber_list *) args;
-	char *dev = subscribers->interface;
-	pcap_t *handle = get_handle(dev);
+	struct SnifferInfo *sniffer_info = (struct SnifferInfo *) args;
+	char *device = sniffer_info->device;
+	pcap_t *handle = get_handle(device);
 	
 	/* set filter for ip packets only */
 	
@@ -124,9 +101,8 @@ void* sniffer_start(void* args)
 	
 	/* set filter for ip packets only */
 	
-    
 	
-	pcap_loop(handle, NUM_PACKETS_BFR_EXIT, got_packet, (u_char *) subscribers);
+	pcap_loop(handle, NUM_PACKETS_BFR_EXIT, got_packet, (u_char *) sniffer_info);
 	
 	/* And close the session */
 	pcap_close(handle);
