@@ -1,11 +1,31 @@
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <signal.h>
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/sendfile.h>
+#include <sys/socket.h>
+
+#include <fcntl.h>
+#include <netinet/in.h>
 
 #include "data_models.h"
+#include "config.h"
+#include "utilities.h"
 
 struct stats 			stats;
+int portno = PUBLISHER_PORT;
+const char *moduleNames[] = { "src_modules/icmpcount.so" };
+
+static volatile int keepRunning = 1;
+
+void intHandler(int dummy) {
+    keepRunning = 0;
+}
 
 struct normal_distribution get_std(double *array, long count)
 {
@@ -206,4 +226,91 @@ void initialize_aggregator(char *module_name, int metric_count)
 void free_aggregator_resources()
 {
 	free(stats.module_name);
+}
+
+void send_module_to_worker(int peer_socket, const char *moduleName)
+{
+	int fd = open(moduleName, O_RDONLY);
+	struct stat file_stat;
+	fstat(fd, &file_stat);
+	
+	// sending file length
+	int32_t file_size = htonl(file_stat.st_size);
+	write(peer_socket, &file_size, sizeof(file_size));
+	
+	// sending file name
+	write(peer_socket, "icmpcount.so", 256);
+	
+	// sending file
+	off_t offset = 0;
+	long remaining_bytes = file_size;
+	long sent_bytes;
+	
+	while (((sent_bytes = sendfile(peer_socket, fd, &offset, BUFSIZ)) > 0) && (remaining_bytes > 0))
+		remaining_bytes -= sent_bytes;
+	
+	close(fd);
+}
+
+void send_modules_to_worker(int peer_socket)
+{
+	int moduleNamesCount = sizeof(moduleNames) / sizeof(moduleNames[0]);
+	
+	// TODO: check if all modules are present before sending count
+	
+	// sending module count
+	int32_t module_count = htonl(moduleNamesCount);
+	write(peer_socket, &module_count, sizeof(module_count));
+	
+	int i;
+	for( i = 0 ; i < moduleNamesCount ; i++)
+	{
+		send_module_to_worker(peer_socket, moduleNames[i]);
+	}
+}
+
+void orchestrator_start()
+{
+	struct sockaddr_in peer_addr;
+	fd_set active_fd_set;
+	int server_socket = open_listening_socket(&portno);
+	
+	const struct timespec timeout = { 1, 0};
+	
+	socklen_t sock_len = sizeof(struct sockaddr_in);
+	
+	while(keepRunning)
+	{
+		FD_ZERO(&active_fd_set);
+		FD_SET(server_socket, &active_fd_set);
+		
+		//TODO: catch ctrl-c signal rather than timeouts 
+		if(pselect(FD_SETSIZE, &active_fd_set, NULL, NULL, &timeout, NULL) > 0)
+		{
+			int peer_socket = accept(server_socket, (struct sockaddr *) &peer_addr, &sock_len);
+			
+			char *address;
+			inet_ntop(AF_INET, &(peer_addr.sin_addr), address, INET_ADDRSTRLEN ); // only ipv4 address
+			
+			printf("Worker %s connected - sending modules.\n", address);
+			
+			send_modules_to_worker(peer_socket);
+		}
+	}
+	
+	close(server_socket);
+}
+
+int main(int argc, char *argv[])
+{
+	signal(SIGINT, intHandler);
+	
+	pthread_t orchestratorThread;
+	start_thread("orchestrator", &orchestratorThread, &orchestrator_start, NULL);
+	
+	while (keepRunning)
+	{
+	}
+	
+	pthread_join(orchestratorThread, NULL);
 }

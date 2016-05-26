@@ -6,21 +6,24 @@ CC = gcc
 #  -Wall turns on most, but not all, compiler warnings
 CFLAGS  = -g 
 #CFLAGS  = -g -Wall
-OBJECTS = $(patsubst %.c, %.so, $(wildcard modules/*.c))
+OBJECTS = $(patsubst %.c, %.so, $(wildcard src_modules/*.c))
 
 
-all: clean worker.out ${OBJECTS}
+all: clean worker.out master.out ${OBJECTS}
 
-modules/%.so: modules/%.c
+src_modules/%.so: src_modules/%.c
 	${CC} ${CFLAGS} $< -shared -fPIC -o $@ 
 
 %.o: %.h
 	${CC} $< -o $@ 
 
-worker.out: worker.c sniffwrap.c sockwrap.c master.c
-	${CC} ${CFLAGS} $^ -pthread -lpopt -lpcap -ldl -lm -o $@
-	
+worker.out: worker.c sockwrap.c utilities.c sniffwrap.c
+	${CC} ${CFLAGS} $^ -pthread -lpcap -ldl -o $@
+	                            
+master.out:	master.c sockwrap.c utilities.c
+	${CC} ${CFLAGS} $^ -pthread -lm -o $@
+
 test: all
 
 clean:
-	rm -rf *.o modules/*.so *.out
+	rm -rf *.o src_modules/*.so *.out

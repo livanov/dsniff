@@ -23,11 +23,11 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 	//	printf("   * Invalid IP header length: %u bytes\n", size_ip);
 	//	return;
 	//}
-	struct SnifferInfo *snifferInfo = (struct SnifferInfo *) args;
+	struct WorkerInfo *workerInfo = (struct WorkerInfo *) args;
 	short i;
-	for( i = 0 ; i < snifferInfo->moduleCount; i++ )
+	for( i = 0 ; i < workerInfo->moduleCount; i++ )
 	{
-		snifferInfo->modules[i].got_packet(packet, header->len);
+		workerInfo->modules[i].got_packet(packet, header->len);
 	}
 }
 
@@ -75,12 +75,11 @@ pcap_t* get_handle(char *dev)
 
 void* sniffer_start(void* args)
 {
-	struct SnifferInfo *sniffer_info = (struct SnifferInfo *) args;
-	char *device = sniffer_info->device;
+	struct WorkerInfo *workerInfo = (struct WorkerInfo *) args;
+	char *device = workerInfo->device;
 	pcap_t *handle = get_handle(device);
 	
 	/* set filter for ip packets only */
-	
 	char filter_exp[] = "ip";
 	//sprintf(filter_exp + strlen(filter_exp), "10.0.0.0/24");	/* filter expression [3] */
 	struct bpf_program fp;										/* compiled filter program (expression) */
@@ -99,10 +98,8 @@ void* sniffer_start(void* args)
 		exit(EXIT_FAILURE);
 	}
 	
-	/* set filter for ip packets only */
 	
-	
-	pcap_loop(handle, NUM_PACKETS_BFR_EXIT, got_packet, (u_char *) sniffer_info);
+	pcap_loop(handle, NUM_PACKETS_BFR_EXIT, got_packet, (u_char *) workerInfo);
 	
 	/* And close the session */
 	pcap_close(handle);

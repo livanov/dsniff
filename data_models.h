@@ -6,38 +6,38 @@ struct metric{
 };
 
 struct report{
-	time_t start;
-	time_t end;
-	struct metric *metrics;
+	time_t 			start;
+	time_t 			end;
+	struct metric 	*metrics;
 };
 
 struct report_list{
-	struct report *report;
-	struct report_list *next;
+	struct report 		*report;
+	struct report_list 	*next;
 };
 
 struct normal_distribution{
-	double std;
-	double mean;
-	long count;
+	double 	std;
+	double 	mean;
+	long 	count;
 };
 
 struct aggregate{
-	time_t start;
-	time_t end;
 	//int length; // int?
-	struct normal_distribution normal_distribution;
-	struct aggregate *next;
+	time_t 						start;
+	time_t 						end;
+	struct normal_distribution 	normal_distribution;
+	struct aggregate 			*next;
 };
 
 struct stats{
-	char *module_name;
-	long count;
-	short metric_count;
-	short accumulated_time;
-	double residual;
-	struct report_list *reports;
-	struct aggregate *history;
+	char 				*module_name;
+	long 				count;
+	short 				metric_count;
+	short 				accumulated_time;
+	double 				residual;
+	struct report_list 	*reports;
+	struct aggregate 	*history;
 };
 
 
@@ -49,8 +49,9 @@ struct ModuleInterface{
 	struct metric* 	(*aggregate_data)		();
 };
 
-struct SnifferInfo{
-	struct ModuleInterface *modules;
-	short moduleCount;
-	char *device;
+struct WorkerInfo{
+	struct 	ModuleInterface *modules;
+	short 					moduleCount;
+	int 					reporting_socketfd;
+	char 					*device;
 };

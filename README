@@ -1,6 +1,5 @@
-To Compile server - 
-	 gcc main.c sniffwrap.c sockwrap.c -lpcap -ldl -lpopt -pthread -g -o program ; ip netns exec ns1 ./program ns1eth0
+master.out - no parameters
 
-to compile client - 
-	 gcc client.c sockwrap.c -o client ; ip netns exec ns2 ./client 10.0.0.11 9120
+worker.out <interface name> <master hostname>
+
 

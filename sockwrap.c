@@ -39,17 +39,18 @@ int open_listening_socket(int *portno)
 		return -1;
 	}
 	
-	// TODO: temporary
-	do{
-		printf("\rWaiting to bind on listening port ... ");
-	}while(bind(socketfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0);
+	int yes = 1;
+	if (setsockopt(socketfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+		fprintf(stderr, "Error in setsockopt. ");
+		return -1;
+	}
 	
-	//if (bind(socketfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) 
-	//{
-	//	fprintf(stderr, "Unable to bind to socket.");
-	//	close(socketfd);
-	//	return -1;
-	//}
+	if (bind(socketfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) 
+	{
+		fprintf(stderr, "Unable to bind to socket.");
+		close(socketfd);
+		return -1;
+	}
 	
 	listen(socketfd, 5);  // Max 5 simultaneous ???
 	
