@@ -13,13 +13,9 @@ int get_portno(int socketfd)
 	struct sockaddr_in serv_addr;
 	socklen_t len = sizeof (serv_addr);
 	if (getsockname(socketfd, (struct sockaddr *) &serv_addr, &len) == -1)
-	{
 		fprintf(stderr, "Unable to get details for opened socket.");
-	}
 	else
-	{
 		portno = ntohs(serv_addr.sin_port);
-	}
 	
 	return portno;
 }
@@ -83,7 +79,6 @@ int connect_to_host(char *hostname, int portno)
 		return -1;
 	}
 		
-	fprintf(stdout, "Connecting to %s:%d .... ", hostname, portno);
 	
 	if (connect(socketfd,(struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) 
     {
@@ -92,7 +87,7 @@ int connect_to_host(char *hostname, int portno)
 		return -1;
 	}
 		
-	fprintf(stdout, "connected\n");
+	fprintf(stdout, "Connected to %s:%d.\n", hostname, portno);
 	
 	return socketfd;
 }

@@ -12,22 +12,35 @@
 #include <unistd.h>
 */
 
-//typedef void (*got_packet_f) (const char *, int );
-
 void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet)
 {
 	//const struct sniff_ethernet *ethernet = (struct sniff_ethernet*)(packet);
-	//const struct sniff_ip *ip = (struct sniff_ip*)(packet + SIZE_ETHERNET);
+	const struct sniff_ip *ip = (struct sniff_ip*)(packet + SIZE_ETHERNET);
+	
+	char *ipAddr = inet_ntoa(ip->ip_dst);
+	
+	//printf("ip addr is: %s\n\n", ipAddr);
 	//int size_ip = IP_HL(ip)*4;
 	//if (size_ip < 20) {
 	//	printf("   * Invalid IP header length: %u bytes\n", size_ip);
 	//	return;
 	//}
+
 	struct WorkerInfo *workerInfo = (struct WorkerInfo *) args;
 	short i;
 	for( i = 0 ; i < workerInfo->moduleCount; i++ )
 	{
-		workerInfo->modules[i].got_packet(packet, header->len);
+		struct ModuleInterface *module = &( workerInfo->modules[i] );
+		
+		void *persistentObject = ht_get( module->persistentObjects, ipAddr );
+		
+		if(persistentObject == NULL) 
+		{
+			persistentObject = module->create_persistent_object();
+			ht_set( module->persistentObjects, ipAddr, persistentObject );
+		}
+
+		workerInfo->modules[i].got_packet(packet, header->len, persistentObject);
 	}
 }
 
@@ -80,7 +93,8 @@ void* sniffer_start(void* args)
 	pcap_t *handle = get_handle(device);
 	
 	/* set filter for ip packets only */
-	char filter_exp[] = "ip";
+	// TODO: add proper filter
+	char filter_exp[] = "ip and src host not 10.0.0.2 and dst host not 10.0.0.2";
 	//sprintf(filter_exp + strlen(filter_exp), "10.0.0.0/24");	/* filter expression [3] */
 	struct bpf_program fp;										/* compiled filter program (expression) */
 	

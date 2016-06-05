@@ -17,10 +17,10 @@ src_modules/%.so: src_modules/%.c
 %.o: %.h
 	${CC} $< -o $@ 
 
-worker.out: worker.c sockwrap.c utilities.c sniffwrap.c
+worker.out: worker.c sockwrap.c utilities.c hashtable.c sniffwrap.c
 	${CC} ${CFLAGS} $^ -pthread -lpcap -ldl -o $@
 	                            
-master.out:	master.c sockwrap.c utilities.c
+master.out: master.c sockwrap.c utilities.c hashtable.c
 	${CC} ${CFLAGS} $^ -pthread -lm -o $@
 
 test: all

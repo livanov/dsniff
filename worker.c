@@ -11,7 +11,7 @@
 #include "sockwrap.h"
 #include "config.h"
 #include "utilities.h"
-//#include "aggregator.h"
+//#include "hashtable.h"
 
 #include <dlfcn.h>
 
@@ -24,6 +24,9 @@
 #include <unistd.h>
 */
 
+
+struct WorkerInfo *workerInfo;
+pthread_mutex_t lock;
 
 char ** download_modules(int client_socket)
 {
@@ -44,7 +47,7 @@ char ** download_modules(int client_socket)
 		read(client_socket, &file_len_netorder, sizeof(file_len_netorder));
 		long file_size = ntohl(file_len_netorder);
 		
-		// gets the file name
+
 		read(client_socket, buffer, 256);
 		moduleNames[i] = malloc(strlen("modules/") + strlen(buffer) + 1);
 		strcpy(moduleNames[i], "modules/");
@@ -81,12 +84,6 @@ short load_modules(struct ModuleInterface **modules, char **moduleNames)
 	{
 		void *handle = dlopen ( moduleNames[i], RTLD_NOW );
 		
-		modules[count]->flush = dlsym ( handle, "flush_data" );
-		if(modules[count]->flush == 0)
-		{
-			printf("Function flush_data was not found in module: %s. MODULE WILL NOT BE LOADED.\n", moduleNames[i]);
-			continue;
-		}
 		
 		modules[count]->get_metric_count = dlsym ( handle, "get_metric_count" );
 		if(modules[count]->get_metric_count == 0)
@@ -116,6 +113,22 @@ short load_modules(struct ModuleInterface **modules, char **moduleNames)
 			continue;
 		}
 		
+		modules[count]->create_persistent_object = dlsym ( handle, "create_persistent_object" );
+		if(modules[count]->create_persistent_object == 0)
+		{
+			printf("Function create_persistent_object was not found in module: %s. MODULE WILL NOT BE LOADED.\n", moduleNames[i]);
+			continue;
+		}
+		
+		modules[count]->free_persistent_object = dlsym ( handle, "free_persistent_object" );
+		if(modules[count]->free_persistent_object == 0)
+		{
+			printf("Function free_persistent_object was not found in module: %s. MODULE WILL NOT BE LOADED.\n", moduleNames[i]);
+			continue;
+		}
+		
+		modules[count]->persistentObjects = ht_create( 65536 );		
+		
 		printf("%s loaded.\n", moduleNames[count]);
 		count++;
 	}
@@ -123,61 +136,148 @@ short load_modules(struct ModuleInterface **modules, char **moduleNames)
 	return count;
 }
 
-void send_to_aggregator(int socketfd, struct report report)
+int send_module_report(int socketfd, struct module_report *moduleReport)
 {
-	//TODO: send over TCP
+	struct report_list *item;
+	item = moduleReport->list;
 	
-	//aggregate(report);
+	uint16_t count = htons(moduleReport->count);
+	if ( ! write( workerInfo->reporting_socketfd, &count, sizeof ( uint16_t ) ) ) 
+		return 0;
+	if ( ! write( workerInfo->reporting_socketfd, &( moduleReport->start ), sizeof ( time_t ) ) )
+		return 0;
+	if ( ! write( workerInfo->reporting_socketfd, &( moduleReport->end ), sizeof ( time_t ) ) )
+		return 0;
+	
+	// send report items 
+	short i, j;
+	for ( i = 0 ; i < moduleReport->count ; i++ )
+	{
+		size_t uidLen = strlen( item->report->uid );
+		
+		// send UID len and UID
+		if ( ! write( workerInfo->reporting_socketfd, &uidLen, sizeof ( size_t ) ) ) 
+			return 0;
+		if ( ! write( workerInfo->reporting_socketfd, item->report->uid, uidLen ) )
+			return 0;
+			
+		// TODO: retrieve from module instead
+		for ( j = 0 ; j < 4 ; j++ )
+		{
+			if ( ! write( workerInfo->reporting_socketfd, &( item->report->metrics[j] ), sizeof ( struct metric ) ) )
+				return 0;
+		}
+			
+		item = item->next;
+	}
+	
+	return 1;
 }
 
-void* reporting_start(void* args)
+void * start_reporting_thread(void* args)
 {
-	struct WorkerInfo *workerInfo = (struct WorkerInfo *) args;
-	struct ModuleInterface *modules = (struct ModuleInterface *) workerInfo->modules;
+	struct ModuleInterface *module = (struct ModuleInterface *) args;
 	
-	//TODO: negotiate on TCP instead
+	// TODO: get delay from module definition
+	int delay = 1;
+	
+	//TODO: negotiate module name and metric count
+	char *moduleName = module->get_module_name();
 	//initialize_aggregator(modules[0].get_module_name(), modules[0].get_metric_count());
 	
-	struct report report;
-	report.start = time(NULL);
+	struct module_report *moduleReport = malloc(sizeof(struct module_report));
+	moduleReport->start = time(NULL);
+	//moduleReport->list = NULL;
 	
-	while(1)
+	short disconnected = 0;
+	while(!disconnected)
 	{
-		sleep( 1 );
+		sleep(delay);
+		
+		pthread_mutex_lock(&lock);
+			struct hashtable *oldObjects = module->persistentObjects;
+			module->persistentObjects = ht_create( 65536 );
+		pthread_mutex_unlock(&lock);
+		
+		moduleReport->end = time(NULL);
+		moduleReport->list = NULL;
+        
+		char **keys = ht_get_keys( oldObjects );
+		moduleReport->count = ht_get_count( oldObjects );
 			
-			//pthread_mutex_lock(&lock);
+		struct report_list *listMember, *tmp;
+		
+		short i;
+		for ( i = 0 ; i < moduleReport->count ; i++ )
+		{
+			void *persistentObject = ht_get( oldObjects, keys[i] );
 			
-			//TODO: traverse all modules
-			report.metrics = modules[0].aggregate_data();
-				
-			modules[0].flush();
-			report.end = time(NULL);
-    
-			//pthread_mutex_unlock(&lock);
+			struct report *report = malloc( sizeof( struct report ) );
+			report->uid = malloc ( strlen ( keys[i] ) );
+			strcpy( report->uid, keys[i] );
+			report->metrics = module->aggregate_data( persistentObject );
+			
+			listMember = malloc( sizeof( struct report_list ) );
+			listMember->report = report;
+			
+			listMember->next = moduleReport->list;
+			moduleReport->list = listMember;
+			
+			module->free_persistent_object( persistentObject );
+		}
 		
-		send_to_aggregator(workerInfo->reporting_socketfd, report);
+		ht_free( oldObjects );
 		
-		free(report.metrics);
+		if ( ! send_module_report( workerInfo->reporting_socketfd, moduleReport ) )
+			disconnected = 1;
 		
-		report.start = report.end;		
+		moduleReport->start = moduleReport->end;
+		
+		//free resources		
+		listMember = moduleReport->list;
+		while( listMember != NULL )
+		{
+			tmp = listMember;
+			listMember = listMember->next;
+			free(tmp->report->metrics);
+			free(tmp->report);
+			free(tmp);
+		}
+	}
+	
+	printf("\nDisconnected!\n");
+}
+
+void * reporting_start(void* args)
+{
+	short threadCount;
+	pthread_t reportingThreads[256];
+	struct ModuleInterface *modules = (struct ModuleInterface *) workerInfo->modules;
+	
+	short i;
+	for( i = 0 ; i < workerInfo->moduleCount ; i++ )
+	{
+		char threadName[256];
+		sprintf(threadName, "reporting for %s", modules[i].get_module_name());
+		start_thread(threadName, &reportingThreads[threadCount++], &start_reporting_thread, (void *) &modules[i]);
 	}
 }
 
 int main(int argc, char *argv[])
 {
-	struct WorkerInfo *workerInfo = malloc ( sizeof ( struct WorkerInfo ) );
+	workerInfo = malloc ( sizeof ( struct WorkerInfo ) );
 	workerInfo->device = strdup(get_device_name(argc, argv));
 	
 	int client_socket = connect_to_host(argv[2], PUBLISHER_PORT);
+	if(client_socket == -1) return;
 	workerInfo->reporting_socketfd = client_socket;
 	char ** modules = download_modules(client_socket);
 	workerInfo->moduleCount = load_modules(&(workerInfo->modules), modules);
 	
 	pthread_t snifferThread;
-	start_thread("sniffer", &snifferThread, &sniffer_start, (void *) workerInfo);
+	start_thread("sniffer", &snifferThread, &sniffer_start, (void *)workerInfo);
 	
-	pthread_t reportingThread;
-	start_thread("reporting", &reportingThread, &reporting_start, (void *) workerInfo);		// connects to aggregator
+	reporting_start(workerInfo);
     
 	while(1)
 	{

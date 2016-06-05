@@ -1,4 +1,5 @@
 #include "config.h"
+#include "hashtable.h"
 
 struct metric{
 	//char* name;
@@ -8,12 +9,20 @@ struct metric{
 struct report{
 	time_t 			start;
 	time_t 			end;
+	char			*uid;
 	struct metric 	*metrics;
 };
 
 struct report_list{
 	struct report 		*report;
 	struct report_list 	*next;
+};
+
+struct module_report{
+	time_t				start;
+	time_t				end;
+	short				count;
+	struct report_list 	*list;
 };
 
 struct normal_distribution{
@@ -26,27 +35,29 @@ struct aggregate{
 	//int length; // int?
 	time_t 						start;
 	time_t 						end;
-	struct normal_distribution 	normal_distribution;
+	struct normal_distribution 	*normal_distribution;
 	struct aggregate 			*next;
 };
 
 struct stats{
-	char 				*module_name;
+	//char 				*userId;
 	long 				count;
-	short 				metric_count;
+	short 				metricCount;
 	short 				accumulated_time;
 	double 				residual;
 	struct report_list 	*reports;
 	struct aggregate 	*history;
 };
 
-
 struct ModuleInterface{
-	void 			(*flush) 				();
-	int 			(*get_metric_count) 	();
-	char* 			(*get_module_name) 		();
-	void 			(*got_packet) 			(const char *, int );
-	struct metric* 	(*aggregate_data)		();
+	struct hashtable 							*persistentObjects;
+	
+	int 			(*get_metric_count) 		();
+	char* 			(*get_module_name) 			();
+	void 			(*got_packet) 				(const char *, int, void *);
+	struct metric* 	(*aggregate_data)			(void *);
+	void*			(*create_persistent_object) ();
+	void 			(*free_persistent_object) 	(void *);
 };
 
 struct WorkerInfo{
