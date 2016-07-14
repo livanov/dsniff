@@ -17,11 +17,8 @@
 #include "config.h"
 #include "utilities.h"
 
-struct hashtable *statsPerModule;
-int peer_socket;
-
-//struct ModuleStats		icmpModuleStats;
-//struct stats 			stats;
+struct hashtable 		*htModules;
+int 					peer_socket;
 int 					portno = PUBLISHER_PORT;
 const char 				*moduleNames[] = { "src_modules/icmpcount.so" };
 
@@ -113,7 +110,7 @@ struct normal_distribution combine_std(struct report_list *reports, struct aggre
 
 	combined.std = sqrt((ess + gss)/(combined.count - 1));
 	
-	//if(metricIdx == 2) print_distr(&combined);
+	if(metricIdx == 2) print_distr(&combined);
 	
 	return combined;
 }
@@ -143,7 +140,7 @@ void aggregate(struct report *report, struct stats *stats)
 		static long time_passed = 0;
 		long count = 0;
 		struct report_list *report, *temp;
-		short i, breakOuter = 0;
+		short i;
 		double values[stats->metricCount][BUFFER_SIZE];
 		memset(values, 0, sizeof(double) * stats->metricCount * BUFFER_SIZE);
 	
@@ -151,7 +148,7 @@ void aggregate(struct report *report, struct stats *stats)
 		{
 			for ( i = 0 ; i < stats->metricCount; i++ )
 				values[ i ][ count ] = report->report->metrics[ i ].value;
-			
+
 			count++;
 			
 			if(stats->history == NULL || report->report->start > stats->history->start)
@@ -200,7 +197,7 @@ void aggregate(struct report *report, struct stats *stats)
 		for ( i = 0 ; i < stats->metricCount ; i++ )
 			distr[i] = get_std(values[i], count);
 		
-		if ( report != NULL ) // same as hitting breakOuter in iterator loop
+		if ( report != NULL ) // same as hitting break in iterator loop
 		{
 			struct aggregate *history = stats->history;
 			
@@ -291,8 +288,7 @@ void send_module(int peer_socket, const char *moduleName)
 	write(peer_socket, &file_size, sizeof(file_size));
 	
 	// sending file name
-	// TODO: get it from moduleName
-	write(peer_socket, "icmpcount.so", 256);
+	write(peer_socket, basename( moduleName ), 256);
 	
 	// sending file
 	off_t offset = 0;
@@ -300,9 +296,7 @@ void send_module(int peer_socket, const char *moduleName)
 	unsigned long sent_bytes;
 	
 	while (((sent_bytes = sendfile(peer_socket, fd, &offset, BUFSIZ)) > 0) && (remaining_bytes > 0))
-	{
 		remaining_bytes -= sent_bytes;
-	}
 	
 	close(fd);
 }
@@ -322,20 +316,36 @@ void send_modules_to_worker(int peer_socket)
 		send_module(peer_socket, moduleNames[i]);
 }
 
-struct module_report * read_module_report(int peer_socket, short metricCount)
+struct module_report * read_module_report(int peer_socket)
 {
 	struct module_report *moduleReport = malloc( sizeof ( struct module_report ) );
 	uint16_t ret;
 	char *buffer;
 	moduleReport->list = NULL;
 	
-	// TODO: should read which module is that 
+	// read module name length
+	buffer = (char *) &ret;
+	if ( ! read( peer_socket, buffer, sizeof ( uint16_t ) ) )
+		return 0;
+	short len = ntohs( ret );
 	
-	// read count
+	// read module name
+	moduleReport->moduleName = malloc( len + 1 );
+	buffer = moduleReport->moduleName;
+	if ( ! read( peer_socket, buffer, len ) )
+		return 0;
+	buffer[len] = '\0';
+		
+	// read metric count
 	buffer = (char *) &ret;
 	if ( ! read( peer_socket, buffer, sizeof ( uint16_t ) ) )
 		return NULL;
+	moduleReport->metricCount = ntohs( ret );
 
+	// read report count
+	buffer = (char *) &ret;
+	if ( ! read( peer_socket, buffer, sizeof ( uint16_t ) ) )
+		return NULL;
 	moduleReport->count = ntohs( ret );
 		
 	// read module report start
@@ -359,26 +369,27 @@ struct module_report * read_module_report(int peer_socket, short metricCount)
 		if ( ! read( peer_socket, buffer, sizeof ( size_t ) ) )
 			return NULL;
 		
-		// read UID
-		buffer = malloc ( uidLen );
-		if ( ! read( peer_socket, buffer, uidLen ) )
-			return NULL;
-			
 		struct report_list *item = malloc ( sizeof ( struct report_list ) );
 		item->report = malloc ( sizeof ( struct report ) );
-		item->report->uid = buffer;
+		item->report->uid = malloc ( uidLen + 1 );
 		
-		item->report->metrics = malloc ( metricCount * sizeof ( struct metric ) );
+		// read UID
+		buffer = item->report->uid;
+		if ( ! read( peer_socket, buffer, uidLen ) )
+			return NULL;
+		buffer[uidLen] = '\0';
+		
+		item->report->metrics = malloc ( moduleReport->metricCount * sizeof ( struct metric ) );
 		
 		//read metrics
-		for( j = 0 ; j < metricCount ; j++ )
+		for( j = 0 ; j < moduleReport->metricCount ; j++ )
 		{
 			buffer = (char *) &( item->report->metrics[j] );
 			if( ! read( peer_socket, buffer, sizeof ( struct metric ) ) )
 				return NULL;
 		}
 		
-		//printf("%-15s : ICMP %6f TCP %6f UDP %6f Other %6f\n", 
+		//if ( i == 0 )printf("%-15s : ICMP %6f TCP %6f UDP %6f Other %6f\n", 
 		//		item->report->uid, 
 		//		item->report->metrics[0].value, item->report->metrics[1].value, 
 		//		item->report->metrics[2].value, item->report->metrics[3].value);
@@ -393,35 +404,42 @@ struct module_report * read_module_report(int peer_socket, short metricCount)
 
 void harvester_start(void *args)
 {
-	// TODO: initialize stats buckets
-	struct stats stats;
-	// TODO: metricCount should be negotiated
-	stats.metricCount = 4;
-
 	struct module_report *moduleReport;
-	while( ( moduleReport = read_module_report(peer_socket, stats.metricCount) ) != NULL )
+	while( ( moduleReport = read_module_report(peer_socket) ) != NULL )
 	{
-		//printf("Received report for %hi users\n", moduleReport->count);
+		struct hashtable *htUids = 
+					( struct hashtable * ) ht_get( htModules, moduleReport->moduleName );
+					
+		if( htUids == NULL )
+		{
+			htUids = ht_create( MAX_UID_COUNT );
+			ht_set( htModules, moduleReport->moduleName, htUids );
+		}		
 			
 		struct report_list *item = moduleReport->list;
 			
 		while ( item != NULL )
 		{
-			// TODO: retrieve stats object item from bucket instead
-			if( strcmp("10.0.0.12", item->report->uid) == 0 )
+			struct stats *stats = ( struct stats * ) ht_get( htUids, item->report->uid );
+			if( stats == NULL ) 
 			{
-				// TODO: start/end should not be in report??
-				item->report->start = moduleReport->start;
-				item->report->end = moduleReport->end;
-				
-				//printf("got %f for udp packets count\n", item->report->metrics[2].value);
-				//printf("%-15s : ICMP %6f TCP %6f UDP %6f Other %6f\n", 
-				//		item->report->uid, 
-				//		item->report->metrics[0].value, item->report->metrics[1].value, 
-				//		item->report->metrics[2].value, item->report->metrics[3].value);
-				
-				aggregate( item->report, &stats );
+				// If this is the first module of this kind, create bucket 
+				stats = malloc( sizeof ( struct stats ) );
+				ht_set( htUids, item->report->uid, stats );
+				stats->metricCount = moduleReport->metricCount;
 			}
+			
+			// TODO: start/end should not be in report??
+			item->report->start = moduleReport->start;
+			item->report->end = moduleReport->end;
+			
+			//printf("got %f for udp packets count\n", item->report->metrics[2].value);
+			//printf("%-15s : ICMP %6f TCP %6f UDP %6f Other %6f\n", 
+			//		item->report->uid, 
+			//		item->report->metrics[0].value, item->report->metrics[1].value, 
+			//		item->report->metrics[2].value, item->report->metrics[3].value);
+			
+			aggregate( item->report, stats );
 			item = item->next;
 		}
 	}
@@ -432,13 +450,14 @@ void harvester_start(void *args)
 
 void orchestrator_start(void *args)
 {
+	const struct timespec timeout = { 1, 0};
 	struct sockaddr_in peer_addr;
 	fd_set active_fd_set;
+	socklen_t sock_len = sizeof(struct sockaddr_in);
+
 	int server_socket = open_listening_socket(&portno);
 	
-	const struct timespec timeout = { 1, 0};
-	
-	socklen_t sock_len = sizeof(struct sockaddr_in);
+	htModules = ht_create( MAX_MODULE_COUNT );
 	
 	while(keepRunning)
 	{
@@ -457,8 +476,6 @@ void orchestrator_start(void *args)
 			
 			send_modules_to_worker(peer_socket);
 			
-			// TODO: negotiate module names and metric count
-			
 			pthread_t harvesterThread;
 			start_thread("harvester", &harvesterThread, &harvester_start, (void *) ipaddress);
 		}
@@ -473,9 +490,6 @@ int main(int argc, char *argv[])
 	
 	pthread_t orchestratorThread;
 	start_thread("orchestrator", &orchestratorThread, &orchestrator_start, NULL);
-	
-	//pthread_t harvesterThread;
-	//start_thread("harvester", &harvesterThread, &harvester_start, NULL);
 	
 	while (keepRunning)
 	{

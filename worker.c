@@ -99,10 +99,10 @@ short load_modules(struct ModuleInterface **modules, char **moduleNames)
 			continue;
 		}
 		
-		modules[count]->aggregate_data = dlsym ( handle, "aggregate_data" );
-		if(modules[count]->aggregate_data == 0)
+		modules[count]->report_data = dlsym ( handle, "report_data" );
+		if(modules[count]->report_data == 0)
 		{
-			printf("Function aggregate_data was not found in module: %s. MODULE WILL NOT BE LOADED.\n", moduleNames[i]);
+			printf("Function report_data was not found in module: %s. MODULE WILL NOT BE LOADED.\n", moduleNames[i]);
 			continue;
 		}
 		
@@ -127,7 +127,14 @@ short load_modules(struct ModuleInterface **modules, char **moduleNames)
 			continue;
 		}
 		
-		modules[count]->persistentObjects = ht_create( 65536 );		
+		modules[count]->get_delay_definition = dlsym ( handle, "get_delay_definition" );
+		if(modules[count]->get_delay_definition == 0)
+		{
+			printf("Function get_delay_definition was not found in module: %s. MODULE WILL NOT BE LOADED.\n", moduleNames[i]);
+			continue;
+		}
+		
+		modules[count]->persistentObjects = ht_create( MAX_UID_COUNT );		
 		
 		printf("%s loaded.\n", moduleNames[count]);
 		count++;
@@ -141,11 +148,28 @@ int send_module_report(int socketfd, struct module_report *moduleReport)
 	struct report_list *item;
 	item = moduleReport->list;
 	
-	uint16_t count = htons(moduleReport->count);
+	short len = strlen( moduleReport->moduleName );
+	uint16_t netLen = htons( len );
+	// send module name len
+	if ( ! write( workerInfo->reporting_socketfd, &netLen, sizeof ( uint16_t ) ) )
+		return 0;
+	// send module name
+	if ( ! write( workerInfo->reporting_socketfd, moduleReport->moduleName, len ) )
+		return 0;
+	
+	uint16_t metricCount = htons( moduleReport->metricCount );
+	// send metric count
+	if ( ! write( workerInfo->reporting_socketfd, &metricCount, sizeof ( uint16_t ) ) )
+		return 0;
+	
+	uint16_t count = htons( moduleReport->count );
+	// send report count
 	if ( ! write( workerInfo->reporting_socketfd, &count, sizeof ( uint16_t ) ) ) 
 		return 0;
+	// send module report start
 	if ( ! write( workerInfo->reporting_socketfd, &( moduleReport->start ), sizeof ( time_t ) ) )
 		return 0;
+	// send module report end
 	if ( ! write( workerInfo->reporting_socketfd, &( moduleReport->end ), sizeof ( time_t ) ) )
 		return 0;
 	
@@ -161,8 +185,7 @@ int send_module_report(int socketfd, struct module_report *moduleReport)
 		if ( ! write( workerInfo->reporting_socketfd, item->report->uid, uidLen ) )
 			return 0;
 			
-		// TODO: retrieve from module instead
-		for ( j = 0 ; j < 4 ; j++ )
+		for ( j = 0 ; j < moduleReport->metricCount ; j++ )
 		{
 			if ( ! write( workerInfo->reporting_socketfd, &( item->report->metrics[j] ), sizeof ( struct metric ) ) )
 				return 0;
@@ -177,26 +200,23 @@ int send_module_report(int socketfd, struct module_report *moduleReport)
 void * start_reporting_thread(void* args)
 {
 	struct ModuleInterface *module = (struct ModuleInterface *) args;
-	
-	// TODO: get delay from module definition
-	int delay = 1;
-	
-	//TODO: negotiate module name and metric count
+	int delay = module->get_delay_definition();
 	char *moduleName = module->get_module_name();
-	//initialize_aggregator(modules[0].get_module_name(), modules[0].get_metric_count());
 	
 	struct module_report *moduleReport = malloc(sizeof(struct module_report));
 	moduleReport->start = time(NULL);
-	//moduleReport->list = NULL;
+	moduleReport->metricCount = module->get_metric_count();
+	moduleReport->moduleName = malloc( strlen ( moduleName ) );
+	strcpy( moduleReport->moduleName, moduleName );
 	
 	short disconnected = 0;
-	while(!disconnected)
+	while( !disconnected )
 	{
 		sleep(delay);
 		
 		pthread_mutex_lock(&lock);
 			struct hashtable *oldObjects = module->persistentObjects;
-			module->persistentObjects = ht_create( 65536 );
+			module->persistentObjects = ht_create( MAX_UID_COUNT );
 		pthread_mutex_unlock(&lock);
 		
 		moduleReport->end = time(NULL);
@@ -215,10 +235,17 @@ void * start_reporting_thread(void* args)
 			struct report *report = malloc( sizeof( struct report ) );
 			report->uid = malloc ( strlen ( keys[i] ) );
 			strcpy( report->uid, keys[i] );
-			report->metrics = module->aggregate_data( persistentObject );
+			report->metrics = module->report_data( persistentObject );
 			
 			listMember = malloc( sizeof( struct report_list ) );
 			listMember->report = report;
+			
+			//if (i==1) printf("%f %f %f %f\n", 
+			//	report->metrics[0].value,
+			//	report->metrics[1].value,
+			//	report->metrics[2].value,
+			//	report->metrics[3].value
+			//	);
 			
 			listMember->next = moduleReport->list;
 			moduleReport->list = listMember;
@@ -240,6 +267,7 @@ void * start_reporting_thread(void* args)
 			tmp = listMember;
 			listMember = listMember->next;
 			free(tmp->report->metrics);
+			free(tmp->report->uid);
 			free(tmp->report);
 			free(tmp);
 		}

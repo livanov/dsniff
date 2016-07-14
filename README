@@ -1,5 +1,10 @@
-master.out - no parameters
+This is a distributed intrusion detection framework based on the master-worker paradigm. Many workers sniff the network traffic by being deployed in key locations throughout a network.
 
+The solution is targeted at cloud infrastructures to employ idle resources.
+
+How to use:
+
+use environment_deploy.sh to deploy namespace built network environment
+use makefile to build
+master.out - needs no parameters
 worker.out <interface name> <master hostname>
-
-

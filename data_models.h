@@ -23,6 +23,8 @@ struct module_report{
 	time_t				end;
 	short				count;
 	struct report_list 	*list;
+	char 				*moduleName;
+	short				metricCount;
 };
 
 struct normal_distribution{
@@ -53,9 +55,10 @@ struct ModuleInterface{
 	struct hashtable 							*persistentObjects;
 	
 	int 			(*get_metric_count) 		();
+	int				(*get_delay_definition)		();
 	char* 			(*get_module_name) 			();
 	void 			(*got_packet) 				(const char *, int, void *);
-	struct metric* 	(*aggregate_data)			(void *);
+	struct metric* 	(*report_data)				(void *);
 	void*			(*create_persistent_object) ();
 	void 			(*free_persistent_object) 	(void *);
 };
